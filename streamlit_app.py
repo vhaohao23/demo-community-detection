@@ -7,8 +7,34 @@ import engine
 
 st.set_page_config(page_title="Community Detection Demo", layout="wide")
 
+if "graph_input" not in st.session_state:
+    st.session_state.graph_input = ""
+if "sel_template" not in st.session_state:
+    st.session_state.sel_template = "Tùy chỉnh (Nhập tay)"
+if "saved_partition" not in st.session_state:
+    st.session_state.saved_partition = None
+if "saved_modularity_q" not in st.session_state:
+    st.session_state.saved_modularity_q = None
+
 st.markdown("""
     <style>
+    /* Zero out all padding — graph fills edge to edge */
+    .main .block-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+    }
+    section[data-testid="stMain"] > div { padding: 0 !important; }
+    /* Cap iframe so it never overflows — Streamlit only sets height, not max-height */
+    .main iframe {
+        max-height: calc(100vh - 56px) !important;
+        width: 100% !important;
+        display: block !important;
+    }
+    /* Kill any bottom whitespace/scroll caused by oversized iframe */
+    section[data-testid="stMain"] { overflow: hidden !important; }
+    [data-testid="stAppViewContainer"] { overflow: hidden !important; }
+    .stApp { overflow: hidden !important; }
+    footer { display: none !important; }
     .main { background-color: #f8f9fa; }
     .stButton>button {
         width: 100%;
@@ -21,17 +47,24 @@ st.markdown("""
     }
     .stButton>button:hover { background-color: #0056b3; color: white; }
     .stTextArea textarea { font-family: 'Courier New', Courier, monospace; font-size: 14px; }
-    h1, h2, h3 { color: #343a40; font-family: 'Segoe UI', sans-serif; }
-    @media (max-width: 768px) {
-        .stTextArea textarea { height: 200px !important; }
-        h1 { font-size: 1.8rem !important; }
-        h2, h3 { font-size: 1.3rem !important; }
+    /* Sidebar: tighter padding, bigger text */
+    [data-testid="stSidebar"] { padding-top: 0.5rem !important; }
+    [data-testid="stSidebar"] h1 {
+        font-size: 1.6rem !important;
+        line-height: 1.2 !important;
+        margin-bottom: 0.2rem !important;
+        padding-top: 0 !important;
+    }
+    [data-testid="stSidebar"] .stCaption {
+        font-size: 0.9rem !important;
+        margin-top: 0 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.4rem !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Phát hiện cộng đồng trong mạng lưới")
-st.write("Sử dụng tối ưu hóa Modularity Q để phân tích cấu trúc đồ thị.")
 
 DATASETS = {
     "Tùy chỉnh (Nhập tay)": "",
@@ -59,6 +92,12 @@ def parse_graph(text):
     return G
 
 
+def _on_template_change():
+    st.session_state.graph_input = DATASETS[st.session_state.sel_template]
+    st.session_state.saved_partition = None
+    st.session_state.saved_modularity_q = None
+
+
 def _remove_overlaps(pos, node_list, min_dist, iterations=60):
     """Push nodes apart until no two are closer than min_dist."""
     p = {n: [float(pos[n][0]), float(pos[n][1])] for n in node_list}
@@ -84,17 +123,25 @@ def _remove_overlaps(pos, node_list, min_dist, iterations=60):
     return {n: (p[n][0], p[n][1]) for n in node_list}
 
 
-def generate_vis_html(G, partition):
+def generate_vis_html(G, partition, modularity_q=None):
     if G.number_of_nodes() == 0:
-        return "<p style='padding:20px;color:#888'>Chưa có nút nào để hiển thị.</p>"
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#fafafa;}
+  body{display:flex;align-items:center;justify-content:center;}
+  p{color:#888;font-size:16px;font-family:'Segoe UI',sans-serif;}
+</style></head><body>
+<p>Chưa có nút nào để hiển thị. Hãy chọn dữ liệu và nhấn nút phát hiện.</p>
+</body></html>"""
 
     has_communities = len(set(partition.values())) > 1
 
-    SCALE = 500
-    NODE_R = 14          # vis.js node radius (px)
-    MIN_DIST = (NODE_R * 2 + 6) / SCALE   # minimum centre-to-centre in layout space
+    SCALE_X = 900   # wider horizontal spread to fill landscape screens
+    SCALE_Y = 500
+    NODE_R = 21     # 150% of original 14
+    MIN_DIST = (NODE_R * 2 + 8) / SCALE_Y  # gap between enlarged nodes
 
-    pos = nx.spring_layout(G, seed=42, k=1.6, iterations=150)
+    pos = nx.spring_layout(G, seed=42, k=2.4, iterations=200)
     pos = _remove_overlaps(pos, list(G.nodes()), min_dist=MIN_DIST)
 
     nodes_js = []
@@ -106,10 +153,9 @@ def generate_vis_html(G, partition):
         nodes_js.append({
             "id": str(node),
             "label": str(node),
-            # tooltipHtml is a custom field — vis.js ignores it; we read it manually
             "tooltipHtml": f"<b>Node {node}</b><br>Cộng đồng: {comm_id}<br>Degree: {degree}",
-            "x": round(float(nx_x) * SCALE, 1),
-            "y": round(float(nx_y) * SCALE, 1),
+            "x": round(float(nx_x) * SCALE_X, 1),
+            "y": round(float(nx_y) * SCALE_Y, 1),
             "color": {
                 "background": color,
                 "border": "#222222",
@@ -131,12 +177,9 @@ def generate_vis_html(G, partition):
 <meta charset="utf-8">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #ffffff; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-  #graph { width: 100%; height: 575px; background: #fafafa; }
-  #hint {
-    text-align: center; font-size: 11px; color: #888;
-    padding: 4px 0 0; user-select: none;
-  }
+  html { width: 100%; height: 100%; }
+  body { width: 100%; height: 100%; overflow: hidden; background: #ffffff; font-family: 'Segoe UI', sans-serif; }
+  #graph { width: 100%; height: 100%; background: #fafafa; }
   #tooltip {
     position: fixed; background: rgba(30,30,30,0.88); color: #fff;
     padding: 6px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6;
@@ -145,8 +188,9 @@ def generate_vis_html(G, partition):
 </style>
 </head>
 <body>
+<div id="graph-wrapper" style="position:relative; width:100%;">
 <div id="graph"></div>
-<div id="hint">Scroll to zoom &nbsp;·&nbsp; Drag canvas to pan &nbsp;·&nbsp; Drag node — release to snap back</div>
+</div>
 <div id="tooltip"></div>
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <script>
@@ -192,10 +236,6 @@ def generate_vis_html(G, partition):
       }
     }
   );
-
-  network.once('afterDrawing', function() {
-    network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
-  });
 
   // ── Custom HTML tooltip ──────────────────────────────────────────────────
   var tip = document.getElementById('tooltip');
@@ -261,6 +301,25 @@ def generate_vis_html(G, partition):
     }
     state.raf = requestAnimationFrame(step);
   });
+
+  // ── Fit graph to visible viewport; re-runs on resize AND sidebar collapse ────
+  function fitGraphToViewport() {
+    var h = window.parent.innerHeight - 56;
+    document.getElementById('graph-wrapper').style.height = h + 'px';
+    document.getElementById('graph').style.height = h + 'px';
+    network.redraw();
+    network.fit({ animation: false });
+    // Zoom out slightly so the graph is centered with equal margin on all sides
+    network.moveTo({ scale: network.getScale() * 0.88 });
+  }
+  fitGraphToViewport();
+  window.parent.addEventListener('resize', fitGraphToViewport);
+  try {
+    var mainEl = window.parent.document.querySelector('[data-testid="stMain"]')
+              || window.parent.document.body;
+    new ResizeObserver(fitGraphToViewport).observe(mainEl);
+  } catch(e) {}
+
 </script>
 </body>
 </html>"""
@@ -268,34 +327,92 @@ def generate_vis_html(G, partition):
     return html
 
 
-col_input, col_viz = st.columns([1, 2])
+# ── Sidebar (left panel — toggle with the native hamburger like VSCode) ────────
+with st.sidebar:
+    st.title("Phát hiện cộng đồng trong mạng lưới")
+    st.caption("Sử dụng tối ưu hóa Modularity Q để phân tích cấu trúc đồ thị.")
+    st.divider()
 
-with col_input:
-    st.subheader("Cấu hình dữ liệu")
-    selected_template = st.selectbox("Chọn mạng mẫu để demo", list(DATASETS.keys()))
+    with st.expander("Cấu hình dữ liệu", expanded=True):
+        st.selectbox(
+            "Chọn mạng mẫu để demo",
+            list(DATASETS.keys()),
+            key="sel_template",
+            on_change=_on_template_change,
+        )
+        st.text_area(
+            label="Dữ liệu cạnh (Graph Data)",
+            key="graph_input",
+            height=300,
+        )
 
-    input_text = st.text_area(
-        label="Dữ liệu cạnh (Graph Data)",
-        value=DATASETS[selected_template],
-        height=400,
-    )
-
-    G = parse_graph(input_text)
+    G = parse_graph(st.session_state.graph_input)
     st.write(f"Trạng thái: **{G.number_of_nodes()}** nút, **{G.number_of_edges()}** cạnh.")
+    st.divider()
+    run_btn = st.button("Bắt đầu phát hiện cộng đồng", use_container_width=True)
 
-with col_viz:
-    st.subheader("Trực quan hóa tương tác")
-    run_btn = st.button("Bắt đầu phát hiện cộng đồng")
+# ── Main area (right — graph only) ────────────────────────────────────────────
+partition = st.session_state.saved_partition or {node: 0 for node in G.nodes()}
+modularity_q = st.session_state.saved_modularity_q
 
-    partition = {node: 0 for node in G.nodes()}
-    if run_btn:
-        if G.number_of_edges() > 0:
-            with st.spinner("Leiden đang tính toán..."):
-                partition = engine.run_leiden(G)
-                q = engine.calculate_modularity(G, partition)
-                st.success(f"Chỉ số Modularity Q: {q:.4f}")
+if run_btn and G.number_of_edges() > 0:
+    with st.spinner("Leiden đang tính toán..."):
+        partition = engine.run_leiden(G)
+        modularity_q = engine.calculate_modularity(G, partition)
+        st.session_state.saved_partition = partition
+        st.session_state.saved_modularity_q = modularity_q
 
-    html_content = generate_vis_html(G, partition)
-    components.html(html_content, height=610)
+html_content = generate_vis_html(G, partition, modularity_q)
+components.html(html_content, height=4000, scrolling=False)
 
-st.info("Mẹo: Scroll để zoom · Kéo nền để pan · Kéo nút để di chuyển · Hover để xem chi tiết.")
+# ── Modularity Q badge injected into parent Streamlit DOM ─────────────────
+# Runs in its own 0-height iframe; accesses window.parent so the badge
+# sits in the real page DOM, below the header and right of the sidebar.
+if modularity_q is not None:
+    q_val = f'{modularity_q:.4f}'
+    components.html(f"""
+    <script>
+    (function() {{
+        var BADGE_ID = 'modq-fixed-badge';
+        var old = window.parent.document.getElementById(BADGE_ID);
+        if (old) old.remove();
+
+        var badge = window.parent.document.createElement('div');
+        badge.id = BADGE_ID;
+        badge.textContent = 'Modularity Q: {q_val}';
+        badge.style.cssText = [
+            'position:fixed',
+            'background:#145a32',
+            'color:#6fcf97',
+            'padding:7px 16px',
+            'border-radius:7px',
+            'font-size:14px',
+            'font-weight:700',
+            'font-family:Segoe UI,sans-serif',
+            'border:1.5px solid #1e8449',
+            'pointer-events:none',
+            'z-index:99999',
+            'white-space:nowrap',
+            'box-shadow:0 2px 8px rgba(0,0,0,0.18)'
+        ].join(';');
+
+        function place() {{
+            var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+            var sw = sidebar ? sidebar.getBoundingClientRect().right : 260;
+            var header = window.parent.document.querySelector('[data-testid="stHeader"]');
+            var hh = header ? header.getBoundingClientRect().bottom : 58;
+            badge.style.top  = (hh + 14) + 'px';
+            badge.style.left = (sw + 14) + 'px';
+        }}
+
+        window.parent.document.body.appendChild(badge);
+        place();
+
+        window.parent.addEventListener('resize', place);
+        try {{
+            var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]') || window.parent.document.body;
+            new ResizeObserver(place).observe(sidebar);
+        }} catch(e) {{}}
+    }})();
+    </script>
+    """, height=0)
