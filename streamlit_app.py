@@ -98,6 +98,26 @@ def _on_template_change():
     st.session_state.saved_modularity_q = None
 
 
+def _on_file_upload():
+    f = st.session_state.get("upload_widget")
+    if f is None:
+        return
+    raw = f.read().decode("utf-8", errors="replace")
+    if f.name.lower().endswith(".csv"):
+        lines = []
+        for line in raw.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                lines.append(f"{parts[0]} {parts[1]}")
+        content = "\n".join(lines)
+    else:
+        content = raw.strip()
+    st.session_state.graph_input = content
+    st.session_state.sel_template = "Tùy chỉnh (Nhập tay)"
+    st.session_state.saved_partition = None
+    st.session_state.saved_modularity_q = None
+
+
 def _remove_overlaps(pos, node_list, min_dist, iterations=60):
     """Push nodes apart until no two are closer than min_dist."""
     p = {n: [float(pos[n][0]), float(pos[n][1])] for n in node_list}
@@ -340,10 +360,17 @@ with st.sidebar:
             key="sel_template",
             on_change=_on_template_change,
         )
+        st.file_uploader(
+            "Hoặc tải lên file đồ thị",
+            type=["txt", "csv", "edgelist", "edges"],
+            key="upload_widget",
+            on_change=_on_file_upload,
+            help="Định dạng: mỗi dòng 'node1 node2' (txt/edgelist) hoặc 'node1,node2' (csv)",
+        )
         st.text_area(
             label="Dữ liệu cạnh (Graph Data)",
             key="graph_input",
-            height=300,
+            height=240,
         )
 
     G = parse_graph(st.session_state.graph_input)
@@ -366,53 +393,54 @@ html_content = generate_vis_html(G, partition, modularity_q)
 components.html(html_content, height=4000, scrolling=False)
 
 # ── Modularity Q badge injected into parent Streamlit DOM ─────────────────
-# Runs in its own 0-height iframe; accesses window.parent so the badge
-# sits in the real page DOM, below the header and right of the sidebar.
-if modularity_q is not None:
-    q_val = f'{modularity_q:.4f}'
-    components.html(f"""
-    <script>
-    (function() {{
-        var BADGE_ID = 'modq-fixed-badge';
-        var old = window.parent.document.getElementById(BADGE_ID);
-        if (old) old.remove();
+# Always runs so it can clean up a stale badge when the dataset changes.
+q_val = f'{modularity_q:.4f}' if modularity_q is not None else ''
+components.html(f"""
+<script>
+(function() {{
+    var BADGE_ID = 'modq-fixed-badge';
+    var old = window.parent.document.getElementById(BADGE_ID);
+    if (old) old.remove();
 
-        var badge = window.parent.document.createElement('div');
-        badge.id = BADGE_ID;
-        badge.textContent = 'Modularity Q: {q_val}';
-        badge.style.cssText = [
-            'position:fixed',
-            'background:#145a32',
-            'color:#6fcf97',
-            'padding:7px 16px',
-            'border-radius:7px',
-            'font-size:14px',
-            'font-weight:700',
-            'font-family:Segoe UI,sans-serif',
-            'border:1.5px solid #1e8449',
-            'pointer-events:none',
-            'z-index:99999',
-            'white-space:nowrap',
-            'box-shadow:0 2px 8px rgba(0,0,0,0.18)'
-        ].join(';');
+    var Q_VAL = '{q_val}';
+    if (!Q_VAL) return;   // no detection yet — just cleared the old badge
 
-        function place() {{
-            var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-            var sw = sidebar ? sidebar.getBoundingClientRect().right : 260;
-            var header = window.parent.document.querySelector('[data-testid="stHeader"]');
-            var hh = header ? header.getBoundingClientRect().bottom : 58;
-            badge.style.top  = (hh + 14) + 'px';
-            badge.style.left = (sw + 14) + 'px';
-        }}
+    var badge = window.parent.document.createElement('div');
+    badge.id = BADGE_ID;
+    badge.textContent = 'Modularity Q: ' + Q_VAL;
+    badge.style.cssText = [
+        'position:fixed',
+        'background:#145a32',
+        'color:#6fcf97',
+        'padding:11px 22px',
+        'border-radius:8px',
+        'font-size:17px',
+        'font-weight:700',
+        'font-family:Segoe UI,sans-serif',
+        'border:2px solid #27ae60',
+        'pointer-events:none',
+        'z-index:99999',
+        'white-space:nowrap',
+        'box-shadow:0 3px 12px rgba(0,0,0,0.25)'
+    ].join(';');
 
-        window.parent.document.body.appendChild(badge);
-        place();
+    function place() {{
+        var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+        var sw = sidebar ? sidebar.getBoundingClientRect().right : 260;
+        var header = window.parent.document.querySelector('[data-testid="stHeader"]');
+        var hh = header ? header.getBoundingClientRect().bottom : 58;
+        badge.style.top  = (hh + 14) + 'px';
+        badge.style.left = (sw + 14) + 'px';
+    }}
 
-        window.parent.addEventListener('resize', place);
-        try {{
-            var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]') || window.parent.document.body;
-            new ResizeObserver(place).observe(sidebar);
-        }} catch(e) {{}}
-    }})();
-    </script>
-    """, height=0)
+    window.parent.document.body.appendChild(badge);
+    place();
+
+    window.parent.addEventListener('resize', place);
+    try {{
+        var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]') || window.parent.document.body;
+        new ResizeObserver(place).observe(sidebar);
+    }} catch(e) {{}}
+}})();
+</script>
+""", height=0)
