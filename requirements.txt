@@ -1,0 +1,7 @@
+streamlit
+networkx
+pandas
+pyvis
+igraph
+leidenalg
+matplotlib
